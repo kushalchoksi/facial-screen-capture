@@ -10,3 +10,7 @@ wheels/
 .venv
 
 /sample_images
+*.mp4
+*.mov
+*.avi
+*.mkv
