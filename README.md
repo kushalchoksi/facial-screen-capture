@@ -1,4 +1,4 @@
-# Face Detection & Frame Extraction using GPU Acceleration
+# Face Detection & Frame Extraction (GPU)
 
 ### Input
 - Video file (MP4, AVI, MOV, etc.)
