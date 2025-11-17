@@ -147,7 +147,7 @@ def format_timestamp(seconds):
 
 
 def main():
-    sample_folder = "sample_images"
+    sample_folder = "reference_images"
     video_file = "test.mp4"
 
     frame_skip = 10
