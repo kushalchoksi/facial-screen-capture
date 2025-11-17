@@ -76,19 +76,8 @@ output_folder = "matched_frames"       # Output directory
 **InsightFace Buffalo_L Model:**
 - Face detection: RetinaFace (10G parameters)
 - Face recognition: ArcFace (R50 backbone)
-- Additional: Gender/age estimation, facial landmarks
 - Embedding size: 512 dimensions
 - Accuracy: 99.8% on LFW benchmark
-
-## System Requirements by Video Length
-
-| Video Length | Minimum RAM | Recommended VRAM | frame_skip |
-|--------------|-------------|------------------|------------|
-| < 5 minutes | 8GB | 2GB | 3-5 |
-| 5-15 minutes | 8GB | 4GB | 5-10 |
-| 15-30 minutes | 16GB | 4GB | 5-10 |
-| 30+ minutes | 16GB | 6GB+ | 10-15 |
-| 2+ hours | 16GB+ | 6GB+ | 15-20 |
 
 ## License
 
@@ -102,5 +91,4 @@ Free to use for personal projects. For commercial use, check licenses:
 - Face detection: [InsightFace](https://github.com/deepinsight/insightface)
 - ONNX Runtime: [Microsoft ONNX Runtime](https://github.com/microsoft/onnxruntime)
 
----
 
