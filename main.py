@@ -1,39 +1,49 @@
-import face_recognition
 import cv2
-import os
+import numpy as np
 from pathlib import Path
+import os
+
+try:
+    from insightface.app import FaceAnalysis
+except ImportError:
+    exit(1)
 
 
-def load_reference_faces(sample_folder):
-    """Load all sample images and create face encodings"""
+def load_reference_faces_gpu(sample_folder, app):
     print(f"Loading reference images from {sample_folder}...")
-    reference_encodings = []
+    reference_embeddings = []
 
     for image_file in Path(sample_folder).glob('*'):
         if image_file.suffix.lower() in ['.jpg', '.jpeg', '.png']:
             print(f"  Processing {image_file.name}")
-            image = face_recognition.load_image_file(str(image_file))
-            encodings = face_recognition.face_encodings(image)
+            img = cv2.imread(str(image_file))
 
-            if encodings:
-                reference_encodings.append(encodings[0])
+            if img is None:
+                print(f"  Warning: Could not read {image_file.name}")
+                continue
+
+            faces = app.get(img)
+
+            if faces:
+                # Use the largest face (by bounding box area)
+                largest_face = max(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))
+                reference_embeddings.append(largest_face.embedding)
+                print(f"   Face detected")
             else:
                 print(f"  Warning: No face found in {image_file.name}")
 
-    print(f"Loaded {len(reference_encodings)} reference face(s)\n")
-    return reference_encodings
+    print(f"Loaded {len(reference_embeddings)} reference face(s)\n")
+    return reference_embeddings
 
 
-def find_character_in_video(video_path, reference_encodings, frame_skip=30, tolerance=0.6):
-    """
-    Process video and find timestamps where the character appears
+def compute_similarity(embedding1, embedding2):
+    """Compute cosine similarity between two embeddings"""
+    return np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
 
-    Args:
-        video_path: Path to the video file
-        reference_encodings: List of face encodings to match against
-        frame_skip: Process every Nth frame (higher = faster but might miss appearances)
-        tolerance: How strict the face matching is (lower = stricter, default 0.6)
-    """
+
+def find_character_in_video_gpu(video_path, reference_embeddings, app,
+                                frame_skip=5, similarity_threshold=0.4,
+                                save_frames=True, output_folder="matched_frames"):
     print(f"Opening video: {video_path}")
     video = cv2.VideoCapture(video_path)
 
@@ -46,62 +56,86 @@ def find_character_in_video(video_path, reference_encodings, frame_skip=30, tole
 
     print(f"Video info: {fps} fps, {total_frames} frames")
     print(f"Processing every {frame_skip} frames")
-    print(f"Matching tolerance: {tolerance}\n")
+    print(f"Similarity threshold: {similarity_threshold}")
+    print(f"Using GPU acceleration CUDA enabled\n")
+
+    if save_frames:
+        Path(output_folder).mkdir(exist_ok=True)
+        print(f"Frames will be saved to: {output_folder}/\n")
 
     matches = []
     frame_number = 0
+    processed_count = 0
 
+    print("Processing video...")
     while True:
         ret, frame = video.read()
         if not ret:
             break
 
-        # Only process every Nth frame to speed things up
         if frame_number % frame_skip == 0:
-            # Convert BGR (OpenCV) to RGB (face_recognition)
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            faces = app.get(frame)
 
-            # Find faces in current frame
-            face_locations = face_recognition.face_locations(rgb_frame)
-            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+            for face in faces:
+                for ref_embedding in reference_embeddings:
+                    similarity = compute_similarity(face.embedding, ref_embedding)
 
-            # Check each face against reference faces
-            for face_encoding in face_encodings:
-                matches_found = face_recognition.compare_faces(
-                    reference_encodings,
-                    face_encoding,
-                    tolerance=tolerance
-                )
+                    if similarity >= similarity_threshold:
+                        timestamp = frame_number / fps
 
-                if any(matches_found):
-                    timestamp = frame_number / fps
-                    matches.append({
-                        'frame': frame_number,
-                        'timestamp': timestamp,
-                        'time_formatted': format_timestamp(timestamp)
-                    })
-                    print(f"** Match found at {format_timestamp(timestamp)} (frame {frame_number})")
-                    break  # Found the character, move to next frame
+                        match_info = {
+                            'frame': frame_number,
+                            'timestamp': timestamp,
+                            'time_formatted': format_timestamp(timestamp),
+                            'similarity': similarity,
+                            'frame_image': frame.copy() if save_frames else None
+                        }
+
+                        matches.append(match_info)
+                        print(f"[MATCH] Found at {format_timestamp(timestamp)} "
+                              f"(frame {frame_number}, similarity: {similarity:.3f})")
+                        break
+
+            processed_count += 1
+
+            if processed_count % 50 == 0:
+                progress = (frame_number / total_frames) * 100
+                print(f"Progress: {progress:.1f}% ({processed_count} frames processed)")
 
         frame_number += 1
 
-        # Progress indicator
-        if frame_number % (frame_skip * 10) == 0:
-            progress = (frame_number / total_frames) * 100
-            print(f"Progress: {progress:.1f}%")
-
     video.release()
 
+    results = []
+    if save_frames and matches:
+        print(f"\nSaving {len(matches)} matched frames...")
+        for match in matches:
+            filename = f"frame_{match['frame']:06d}_{match['time_formatted'].replace(':', '-')}.jpg"
+            filepath = os.path.join(output_folder, filename)
+            cv2.imwrite(filepath, match['frame_image'])
+
+            results.append({
+                'frame': match['frame'],
+                'timestamp': match['timestamp'],
+                'time_formatted': match['time_formatted'],
+                'similarity': match['similarity'],
+                'filename': filename
+            })
+        print(f"Frames saved to {output_folder}/")
+    else:
+        results = [{k: v for k, v in m.items() if k != 'frame_image'} for m in matches]
+
     print(f"\n{'='*50}")
-    print(f"RESULTS: Found {len(matches)} appearances")
+    print(f"RESULTS: Found {len(results)} appearances")
     print(f"{'='*50}")
 
-    if matches:
+    if results:
         print("\nTimestamps where character appears:")
-        for match in matches:
-            print(f"  {match['time_formatted']} (frame {match['frame']})")
+        for match in results:
+            print(f"  {match['time_formatted']} (frame {match['frame']}, "
+                  f"similarity: {match['similarity']:.3f})")
 
-    return matches
+    return results
 
 
 def format_timestamp(seconds):
@@ -116,24 +150,51 @@ def main():
     sample_folder = "sample_images"
     video_file = "test.mp4"
 
-    reference_encodings = load_reference_faces(sample_folder)
+    frame_skip = 10
+    similarity_threshold = 0.4
 
-    if not reference_encodings:
-        print("Error: No reference faces found. Please add sample images to the folder")
+    save_frames = True
+    output_folder = "matched_frames"
+
+    print("="*50)
+    print("GPU-ACCELERATED FACE FINDER")
+    print("="*50 + "\n")
+
+    print("Initializing GPU face detection...")
+    try:
+        app = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        app.prepare(ctx_id=0, det_size=(640, 640))  # ctx_id=0 for first GPU
+        print("GPU initialized successfully!\n")
+    except Exception as e:
+        print(f"Warning: GPU initialization failed: {e}")
+        print("Falling back to CPU...\n")
+        app = FaceAnalysis(providers=['CPUExecutionProvider'])
+        app.prepare(ctx_id=-1, det_size=(640, 640))
+
+    reference_embeddings = load_reference_faces_gpu(sample_folder, app)
+
+    if not reference_embeddings:
+        print("Error: No reference faces found.")
         return
 
-    matches = find_character_in_video(
+    matches = find_character_in_video_gpu(
         video_file,
-        reference_encodings,
-        frame_skip=30,
-        tolerance=0.6
+        reference_embeddings,
+        app,
+        frame_skip=frame_skip,
+        similarity_threshold=similarity_threshold,
+        save_frames=save_frames,
+        output_folder=output_folder
     )
 
     if matches:
         with open('timestamps.txt', 'w') as f:
             f.write("Timestamps where character appears:\n\n")
             for match in matches:
-                f.write(f"{match['time_formatted']}\n")
+                line = f"{match['time_formatted']} (similarity: {match['similarity']:.3f})"
+                if 'filename' in match:
+                    line += f" - {match['filename']}"
+                f.write(line + "\n")
         print("\nTimestamps saved to timestamps.txt")
 
 
