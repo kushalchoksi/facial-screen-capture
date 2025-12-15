@@ -10,7 +10,9 @@ wheels/
 .venv
 
 /reference_images/
+/matched_frames/
 *.mp4
 *.mov
 *.avi
 *.mkv
+*.onnx
