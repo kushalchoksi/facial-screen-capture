@@ -517,21 +517,37 @@ def save_results(matches: list[MatchResult], config: ProcessingConfig, fps: floa
 
 
 def initialize_face_app() -> FaceAnalysis:
-    """Initialize InsightFace with GPU if available, fallback to CPU."""
+    """Initialize InsightFace with best available provider."""
+    import platform
     print("Initializing face detection...")
-    
-    try:
-        app = FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        app.prepare(ctx_id=0, det_size=(640, 640))
-        print("  Using GPU (CUDA)")
-    except Exception as e:
-        print(f"  GPU not available: {e}")
-        print("  Falling back to CPU")
-        app = FaceAnalysis(providers=['CPUExecutionProvider'])
-        app.prepare(ctx_id=-1, det_size=(640, 640))
-    
-    print()
-    return app
+
+    # Try providers in order of preference based on platform
+    if platform.system() == 'Darwin':
+        # macOS: try CoreML first (Apple Silicon), then CPU
+        providers_to_try = [
+            (['CoreMLExecutionProvider', 'CPUExecutionProvider'], 'CoreML'),
+            (['CPUExecutionProvider'], 'CPU'),
+        ]
+    else:
+        # Linux/Windows: try CUDA first, then CPU
+        providers_to_try = [
+            (['CUDAExecutionProvider', 'CPUExecutionProvider'], 'CUDA'),
+            (['CPUExecutionProvider'], 'CPU'),
+        ]
+
+    for providers, name in providers_to_try:
+        try:
+            app = FaceAnalysis(providers=providers)
+            ctx_id = 0 if 'CUDA' in name or 'CoreML' in name else -1
+            app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+            print(f"  Using {name}")
+            print()
+            return app
+        except Exception as e:
+            print(f"  {name} not available: {e}")
+            continue
+
+    raise RuntimeError("No execution provider available for face detection")
 
 
 def run_face_finder(config: ProcessingConfig) -> tuple[list[MatchResult], ProcessingStats]:
