@@ -10,11 +10,13 @@ from typing import Optional
 import threading
 import uuid
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import mimetypes
+import os
 
 from .detection import get_detector, DetectedSegment, DetectionProgress
 
@@ -364,8 +366,12 @@ async def get_video_info_endpoint():
 
 
 @app.get("/video/stream")
-async def stream_video():
-    """Stream the loaded video file."""
+async def stream_video(request: Request, range: str = Header(default=None)):
+    """
+    Stream the loaded video file with HTTP Range support.
+    This enables efficient seeking in large video files without
+    loading the entire file into memory.
+    """
     if not state.video_path:
         raise HTTPException(400, "No video loaded")
 
@@ -373,10 +379,67 @@ async def stream_video():
     if not video_path.exists():
         raise HTTPException(404, "Video file not found")
 
-    return FileResponse(
-        video_path,
-        media_type="video/mp4",
-        filename=video_path.name,
+    file_size = video_path.stat().st_size
+
+    # Determine content type
+    content_type, _ = mimetypes.guess_type(str(video_path))
+    if not content_type:
+        content_type = "video/mp4"
+
+    # Handle range request for partial content
+    if range:
+        # Parse range header: "bytes=start-end" or "bytes=start-"
+        range_str = range.replace("bytes=", "")
+        parts = range_str.split("-")
+
+        start = int(parts[0]) if parts[0] else 0
+        end = int(parts[1]) if parts[1] else file_size - 1
+
+        # Clamp to file bounds
+        start = max(0, start)
+        end = min(end, file_size - 1)
+        content_length = end - start + 1
+
+        def iter_file_range():
+            """Generator that yields chunks from the specified range."""
+            chunk_size = 1024 * 1024  # 1MB chunks
+            with open(video_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    read_size = min(chunk_size, remaining)
+                    data = f.read(read_size)
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        return StreamingResponse(
+            iter_file_range(),
+            status_code=206,  # Partial Content
+            media_type=content_type,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+            }
+        )
+
+    # No range requested - stream entire file
+    def iter_file():
+        """Generator that yields the entire file in chunks."""
+        chunk_size = 1024 * 1024  # 1MB chunks
+        with open(video_path, "rb") as f:
+            while chunk := f.read(chunk_size):
+                yield chunk
+
+    return StreamingResponse(
+        iter_file(),
+        media_type=content_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+        }
     )
 
 
