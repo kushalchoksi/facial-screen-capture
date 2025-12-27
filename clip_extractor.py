@@ -8,10 +8,12 @@ video clips instead of individual frames.
 import av
 import cv2
 import numpy as np
+from fractions import Fraction
 from pathlib import Path
 import time
 from dataclasses import dataclass
 from typing import Optional
+import traceback
 
 try:
     from insightface.app import FaceAnalysis
@@ -534,95 +536,68 @@ def extract_clip_pyav(
     include_audio: bool = True
 ) -> bool:
     """
-    Extract a clip from video using PyAV with stream copy.
+    Extract a clip from video using PyAV with stream copy (remuxing).
     Returns True on success, False on failure.
     """
     try:
-        input_container = av.open(video_path)
-        output_container = av.open(str(output_path), 'w')
+        with av.open(video_path) as in_container:
+            out_container = av.open(str(output_path), mode='w')
 
-        # Get input streams
-        input_video = input_container.streams.video[0]
-        input_audio = None
-        if include_audio and len(input_container.streams.audio) > 0:
-            input_audio = input_container.streams.audio[0]
-
-        # Create output streams (copy codec settings)
-        output_video = output_container.add_stream(template=input_video)
-        output_audio = None
-        if input_audio:
-            output_audio = output_container.add_stream(template=input_audio)
-
-        # Calculate PTS boundaries
-        video_time_base = input_video.time_base
-        start_pts = int(start_time / video_time_base)
-        end_pts = int(end_time / video_time_base)
-
-        # Seek to start (seek to keyframe before start)
-        input_container.seek(start_pts, stream=input_video)
-
-        # Track the first video PTS we see for offset calculation
-        first_video_pts = None
-        first_audio_pts = None
-
-        # Demux and remux packets
-        streams_to_demux = [input_video]
-        if input_audio:
-            streams_to_demux.append(input_audio)
-
-        for packet in input_container.demux(streams_to_demux):
-            # Skip empty packets
-            if packet.dts is None:
-                continue
-
-            if packet.stream == input_video:
-                # Check if we've passed the end
-                if packet.pts is not None and packet.pts > end_pts:
-                    break
-
-                # Skip packets before start (but keep keyframes for decoding)
-                if packet.pts is not None and packet.pts < start_pts:
-                    # Keep if it's a keyframe needed for decoding
-                    if not packet.is_keyframe:
+            in_streams = []
+            out_streams = []
+            for in_stream in in_container.streams:
+                if in_stream.type in ('video', 'audio'):
+                    if not include_audio and in_stream.type == 'audio':
                         continue
+                    out_stream = out_container.add_stream_from_template(in_stream, opaque=True)
+                    in_streams.append(in_stream)
+                    out_streams.append(out_stream)
 
-                # Track first PTS for offset
-                if first_video_pts is None and packet.pts is not None:
-                    first_video_pts = packet.pts
+            if not in_streams:
+                out_container.close()
+                return False
+            
+            # Seek to the start time
+            in_container.seek(int(start_time * av.time_base), backward=True, any_frame=False, stream=None)
 
-                # Remap packet to output stream with offset
-                if first_video_pts is not None and packet.pts is not None:
-                    packet.pts -= first_video_pts
-                    packet.dts = packet.pts if packet.dts else None
-                    packet.stream = output_video
-                    output_container.mux(packet)
-
-            elif input_audio and packet.stream == input_audio:
-                # Convert video timestamps to audio timestamps
-                audio_time_base = input_audio.time_base
-                audio_start_pts = int(start_time / audio_time_base)
-                audio_end_pts = int(end_time / audio_time_base)
-
-                if packet.pts is not None and packet.pts > audio_end_pts:
+            pts_offset_map = {s: None for s in in_streams}
+            
+            for packet in in_container.demux(in_streams):
+                if packet.dts is None:
                     continue
 
-                if packet.pts is not None and packet.pts < audio_start_pts:
-                    continue
+                packet_time_in_seconds = packet.pts * float(packet.stream.time_base)
 
-                if first_audio_pts is None and packet.pts is not None:
-                    first_audio_pts = packet.pts
+                if pts_offset_map[packet.stream] is None:
+                    pts_offset_map[packet.stream] = packet.pts
 
-                if first_audio_pts is not None and packet.pts is not None:
-                    packet.pts -= first_audio_pts
-                    packet.dts = packet.pts if packet.dts else None
-                    packet.stream = output_audio
-                    output_container.mux(packet)
+                if packet_time_in_seconds < end_time:
+                    if packet.pts is None or pts_offset_map[packet.stream] is None:
+                        continue
+                    
+                    packet.pts -= pts_offset_map[packet.stream]
+                    packet.dts -= pts_offset_map[packet.stream]
 
-        output_container.close()
-        input_container.close()
+                    if packet.pts < 0:
+                        packet.pts = 0
+                    if packet.dts < 0:
+                        packet.dts = 0
+                    
+                    for i, in_s in enumerate(in_streams):
+                        if in_s == packet.stream:
+                            packet.stream = out_streams[i]
+                            break
+                    
+                    out_container.mux(packet)
+                else:
+                    if packet.stream.type == 'video':
+                        break
+            
+            out_container.close()
         return True
 
     except Exception as e:
+        traceback.print_exc()
         print(f"    Error extracting clip: {e}")
         return False
 

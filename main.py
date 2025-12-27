@@ -363,7 +363,7 @@ def pass2_targeted_capture(
     print(f"  Segment padding: {config.pass2_segment_padding}s")
     print(f"  Min gap between saves: {config.pass2_min_gap_between_saves}s")
     print()
-    
+        
     # Show segments we'll process
     print("  Segments to capture:")
     for i, (seg_start, seg_end) in enumerate(merged_segments):
