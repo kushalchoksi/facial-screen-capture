@@ -1,22 +1,17 @@
-"""
-FastAPI backend for the clip editor.
-Handles video streaming, face detection, and clip export.
-"""
-
-import asyncio
+import shutil
 import av
-from pathlib import Path
-from typing import Optional
-import threading
 import uuid
-
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Header
+from pathlib import Path
+from typing import Optional, List
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Header, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import mimetypes
 import os
+import traceback
+import threading
 
 from .detection import get_detector, DetectedSegment, DetectionProgress
 
@@ -128,97 +123,74 @@ def run_detection(video_path: str, reference_folder: str, clip_padding: float):
 
 
 def extract_clip(video_path: str, start_time: float, end_time: float, output_path: Path) -> bool:
-    """Extract a clip using PyAV."""
+    """Extract a clip using PyAV with stream copy."""
     try:
-        input_container = av.open(video_path)
-        output_container = av.open(str(output_path), 'w')
+        with av.open(video_path) as in_container:
+            out_container = av.open(str(output_path), mode='w')
 
-        input_video = input_container.streams.video[0]
-        input_audio = None
-        if len(input_container.streams.audio) > 0:
-            input_audio = input_container.streams.audio[0]
+            in_streams = []
+            out_streams = []
+            for in_stream in in_container.streams:
+                if in_stream.type in ('video', 'audio'):
+                    out_stream = out_container.add_stream_from_template(in_stream, opaque=True)
+                    in_streams.append(in_stream)
+                    out_streams.append(out_stream)
 
-        output_video = output_container.add_stream(template=input_video)
-        output_audio = None
-        if input_audio:
-            output_audio = output_container.add_stream(template=input_audio)
+            if not in_streams:
+                out_container.close()
+                return False
+            
+            # Seek to the start time
+            in_container.seek(int(start_time * av.time_base), backward=True, any_frame=False, stream=None)
 
-        video_time_base = input_video.time_base
-        start_pts = int(start_time / video_time_base)
-        end_pts = int(end_time / video_time_base)
+            pts_offset_map = {s: None for s in in_streams}
+            
+            for packet in in_container.demux(in_streams):
+                if packet.dts is None:
+                    continue
 
-        input_container.seek(start_pts, stream=input_video)
+                packet_time_in_seconds = packet.pts * float(packet.stream.time_base)
 
-        first_video_pts = None
-        first_audio_pts = None
+                if pts_offset_map[packet.stream] is None:
+                    pts_offset_map[packet.stream] = packet.pts
 
-        streams_to_demux = [input_video]
-        if input_audio:
-            streams_to_demux.append(input_audio)
-
-        for packet in input_container.demux(streams_to_demux):
-            if packet.dts is None:
-                continue
-
-            if packet.stream == input_video:
-                if packet.pts is not None and packet.pts > end_pts:
-                    break
-
-                if packet.pts is not None and packet.pts < start_pts:
-                    if not packet.is_keyframe:
+                if packet_time_in_seconds < end_time:
+                    if packet.pts is None or pts_offset_map[packet.stream] is None:
                         continue
+                    
+                    packet.pts -= pts_offset_map[packet.stream]
+                    packet.dts -= pts_offset_map[packet.stream]
 
-                if first_video_pts is None and packet.pts is not None:
-                    first_video_pts = packet.pts
-
-                if first_video_pts is not None and packet.pts is not None:
-                    packet.pts -= first_video_pts
-                    packet.dts = packet.pts if packet.dts else None
-                    packet.stream = output_video
-                    output_container.mux(packet)
-
-            elif input_audio and packet.stream == input_audio:
-                audio_time_base = input_audio.time_base
-                audio_start_pts = int(start_time / audio_time_base)
-                audio_end_pts = int(end_time / audio_time_base)
-
-                if packet.pts is not None and packet.pts > audio_end_pts:
-                    continue
-
-                if packet.pts is not None and packet.pts < audio_start_pts:
-                    continue
-
-                if first_audio_pts is None and packet.pts is not None:
-                    first_audio_pts = packet.pts
-
-                if first_audio_pts is not None and packet.pts is not None:
-                    packet.pts -= first_audio_pts
-                    packet.dts = packet.pts if packet.dts else None
-                    packet.stream = output_audio
-                    output_container.mux(packet)
-
-        output_container.close()
-        input_container.close()
+                    if packet.pts < 0:
+                        packet.pts = 0
+                    if packet.dts < 0:
+                        packet.dts = 0
+                    
+                    for i, in_s in enumerate(in_streams):
+                        if in_s == packet.stream:
+                            packet.stream = out_streams[i]
+                            break
+                    
+                    out_container.mux(packet)
+                else:
+                    if packet.stream.type == 'video':
+                        break
+            
+            out_container.close()
         return True
 
     except Exception as e:
+        traceback.print_exc()
         print(f"Error extracting clip: {e}")
         return False
 
-
-# --- API Endpoints ---
-
-@app.post("/api/load")
-async def load_video(request: LoadVideoRequest, background_tasks: BackgroundTasks):
-    """Load a video and start face detection."""
-    video_path = Path(request.video_path)
-    reference_folder = Path(request.reference_folder)
-
+def start_video_load(video_path: Path, reference_folder: Path, clip_padding: float):
+    """Shared logic to start video loading and detection."""
     if not video_path.exists():
-        raise HTTPException(404, f"Video not found: {request.video_path}")
+        raise HTTPException(404, f"Video not found: {video_path}")
 
     if not reference_folder.exists():
-        raise HTTPException(404, f"Reference folder not found: {request.reference_folder}")
+        raise HTTPException(404, f"Reference folder not found: {reference_folder}")
 
     # Get video info
     try:
@@ -238,7 +210,7 @@ async def load_video(request: LoadVideoRequest, background_tasks: BackgroundTask
     # Start detection in background
     thread = threading.Thread(
         target=run_detection,
-        args=(state.video_path, state.reference_folder, request.clip_padding)
+        args=(state.video_path, state.reference_folder, clip_padding)
     )
     thread.start()
 
@@ -246,6 +218,73 @@ async def load_video(request: LoadVideoRequest, background_tasks: BackgroundTask
         "status": "ok",
         "video_info": info,
     }
+
+
+# --- API Endpoints ---
+
+@app.post("/api/load")
+async def load_video(request: LoadVideoRequest, background_tasks: BackgroundTasks):
+    """Load a video from path and start face detection."""
+    return start_video_load(Path(request.video_path), Path(request.reference_folder), request.clip_padding)
+
+
+@app.post("/api/load_upload")
+async def load_video_upload(
+    video_file: Optional[UploadFile] = File(default=None),
+    video_path: Optional[str] = Form(default=None),
+    reference_files: Optional[List[UploadFile]] = File(default=None),
+    reference_folder: Optional[str] = Form(default=None),
+    clip_padding: float = Form(default=2.0)
+):
+    """Upload video and/or reference images and start detection."""
+    uploads_dir = Path("uploads")
+    uploads_dir.mkdir(exist_ok=True)
+    
+    # 1. Handle Video
+    final_video_path = None
+    if video_file:
+        # Save uploaded video
+        final_video_path = uploads_dir / video_file.filename
+        try:
+            with final_video_path.open("wb") as buffer:
+                shutil.copyfileobj(video_file.file, buffer)
+        except Exception as e:
+            raise HTTPException(500, f"Failed to save uploaded video: {e}")
+    elif video_path:
+        final_video_path = Path(video_path)
+    else:
+        raise HTTPException(400, "Must provide either video_file or video_path")
+
+    # 2. Handle References
+    final_ref_folder = None
+    if reference_files:
+        # Create unique folder for this batch of references
+        ref_id = uuid.uuid4().hex
+        final_ref_folder = uploads_dir / "refs" / ref_id
+        final_ref_folder.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            for ref_file in reference_files:
+                # Skip empty filenames (can happen with directory upload sometimes)
+                if not ref_file.filename:
+                    continue
+                
+                # We only care about the filename, not the relative path structure for now
+                # (flattening the directory structure)
+                safe_name = Path(ref_file.filename).name
+                dest_path = final_ref_folder / safe_name
+                
+                with dest_path.open("wb") as buffer:
+                    shutil.copyfileobj(ref_file.file, buffer)
+        except Exception as e:
+            raise HTTPException(500, f"Failed to save reference images: {e}")
+            
+    elif reference_folder:
+        final_ref_folder = Path(reference_folder)
+    else:
+        raise HTTPException(400, "No reference files received (check your folder selection) and no server path provided.")
+
+    return start_video_load(final_video_path, final_ref_folder, clip_padding)
 
 
 @app.get("/api/status")
