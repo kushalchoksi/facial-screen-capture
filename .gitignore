@@ -9,6 +9,7 @@ wheels/
 # Virtual environments
 .venv
 
+# Project files
 /reference_images/
 /matched_frames/
 *.mp4
@@ -16,3 +17,23 @@ wheels/
 *.avi
 *.mkv
 *.onnx
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+.env
+.env*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+
