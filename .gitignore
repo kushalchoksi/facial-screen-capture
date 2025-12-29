@@ -13,6 +13,7 @@ wheels/
 /reference_images/
 /matched_frames/
 /clips/
+/uploads/
 *.mp4
 *.mov
 *.avi
