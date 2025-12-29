@@ -12,6 +12,7 @@ wheels/
 # Project files
 /reference_images/
 /matched_frames/
+/clips/
 *.mp4
 *.mov
 *.avi
