@@ -24,6 +24,19 @@ const elements = {
     btnLoad: document.getElementById('btn-load'),
     btnCancelLoad: document.getElementById('btn-cancel-load'),
     btnConfirmLoad: document.getElementById('btn-confirm-load'),
+    
+    // Tabs & New Inputs
+    tabFile: document.getElementById('tab-file'),
+    tabPath: document.getElementById('tab-path'),
+    inputFileContainer: document.getElementById('input-file-container'),
+    inputPathContainer: document.getElementById('input-path-container'),
+    videoFileInput: document.getElementById('video-file-input'),
+
+    tabRefFolder: document.getElementById('tab-ref-folder'),
+    tabRefPath: document.getElementById('tab-ref-path'),
+    inputRefFolderContainer: document.getElementById('input-ref-folder-container'),
+    inputRefPathContainer: document.getElementById('input-ref-path-container'),
+    referenceFolderInput: document.getElementById('reference-folder-input'),
 
     // Video
     video: document.getElementById('video-player'),
@@ -93,34 +106,143 @@ async function api(method, endpoint, body = null) {
 
 function showLoadModal() {
     elements.loadModal.classList.remove('hidden');
-    elements.videoPathInput.focus();
+    // Focus appropriate input based on active tab
+    if (elements.tabPath.classList.contains('active')) {
+        elements.videoPathInput.focus();
+    }
 }
 
 function hideLoadModal() {
     elements.loadModal.classList.add('hidden');
 }
 
+// --- Tabs ---
+
+function switchTab(tab) {
+    if (tab === 'file') {
+        elements.tabFile.classList.add('active');
+        elements.tabPath.classList.remove('active');
+        elements.inputFileContainer.classList.remove('hidden');
+        elements.inputPathContainer.classList.add('hidden');
+    } else {
+        elements.tabFile.classList.remove('active');
+        elements.tabPath.classList.add('active');
+        elements.inputFileContainer.classList.add('hidden');
+        elements.inputPathContainer.classList.remove('hidden');
+        setTimeout(() => elements.videoPathInput.focus(), 50);
+    }
+}
+
+function switchRefTab(tab) {
+    if (tab === 'folder') {
+        elements.tabRefFolder.classList.add('active');
+        elements.tabRefPath.classList.remove('active');
+        elements.inputRefFolderContainer.classList.remove('hidden');
+        elements.inputRefPathContainer.classList.add('hidden');
+    } else {
+        elements.tabRefFolder.classList.remove('active');
+        elements.tabRefPath.classList.add('active');
+        elements.inputRefFolderContainer.classList.add('hidden');
+        elements.inputRefPathContainer.classList.remove('hidden');
+        setTimeout(() => elements.referencePathInput.focus(), 50);
+    }
+}
+
+elements.tabFile.addEventListener('click', () => switchTab('file'));
+elements.tabPath.addEventListener('click', () => switchTab('path'));
+elements.tabRefFolder.addEventListener('click', () => switchRefTab('folder'));
+elements.tabRefPath.addEventListener('click', () => switchRefTab('path'));
+
+
 // --- Video Loading ---
 
 async function loadVideo() {
-    const videoPath = elements.videoPathInput.value.trim();
-    const referencePath = elements.referencePathInput.value.trim();
+    const isVideoFileTab = elements.tabFile.classList.contains('active');
+    const isRefFolderTab = elements.tabRefFolder.classList.contains('active');
     const clipPadding = parseFloat(elements.clipPaddingInput.value) || 2.0;
 
-    if (!videoPath || !referencePath) {
-        alert('Please provide both video path and reference folder');
-        return;
+    // Validate inputs
+    let videoFile, videoPath, refFiles, refPath;
+
+    if (isVideoFileTab) {
+        videoFile = elements.videoFileInput.files[0];
+        if (!videoFile) return alert('Please select a video file');
+    } else {
+        videoPath = elements.videoPathInput.value.trim();
+        if (!videoPath) return alert('Please provide video path');
+    }
+
+    if (isRefFolderTab) {
+        refFiles = elements.referenceFolderInput.files;
+        if (!refFiles || refFiles.length === 0) return alert('Please select a reference folder with images');
+    } else {
+        refPath = elements.referencePathInput.value.trim();
+        if (!refPath) return alert('Please provide reference folder path');
     }
 
     hideLoadModal();
     showProgress();
 
     try {
-        const result = await api('POST', '/api/load', {
-            video_path: videoPath,
-            reference_folder: referencePath,
-            clip_padding: clipPadding,
-        });
+        let result;
+
+        // If EITHER is a file upload, we must use the multipart endpoint
+        if (isVideoFileTab || isRefFolderTab) {
+            elements.progressText.textContent = 'Uploading data...';
+            const formData = new FormData();
+            
+            formData.append('clip_padding', clipPadding);
+
+            if (isVideoFileTab) {
+                formData.append('video_file', videoFile);
+            } else {
+                formData.append('video_path', videoPath);
+            }
+
+            if (isRefFolderTab) {
+                let addedCount = 0;
+                for (let i = 0; i < refFiles.length; i++) {
+                    const file = refFiles[i];
+                    // Only append images
+                    // Check MIME type or extension
+                    const isImage = file.type.startsWith('image/') || 
+                                  /\.(jpg|jpeg|png|bmp|webp|tiff|gif)$/i.test(file.name);
+                    
+                    if (isImage) {
+                        formData.append('reference_files', file);
+                        addedCount++;
+                    }
+                }
+                
+                if (addedCount === 0) {
+                    hideProgress();
+                    alert('No valid images (jpg, png, etc.) found in the selected folder.');
+                    return;
+                }
+                console.log(`Uploading ${addedCount} reference images`);
+            } else {
+                formData.append('reference_folder', refPath);
+            }
+
+            const response = await fetch('/api/load_upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.detail || `HTTP ${response.status}`);
+            }
+            result = await response.json();
+
+        } else {
+            // Both are paths - use JSON endpoint
+            result = await api('POST', '/api/load', {
+                video_path: videoPath,
+                reference_folder: refPath,
+                clip_padding: clipPadding,
+            });
+        }
 
         // Update state
         state.duration = result.video_info.duration;
@@ -142,7 +264,7 @@ async function loadVideo() {
 
     } catch (error) {
         hideProgress();
-        alert(`Failed to load video: ${error.message}`);
+        alert(`Failed to load: ${error.message}`);
     }
 }
 

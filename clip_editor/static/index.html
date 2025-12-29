@@ -22,12 +22,34 @@
             <div class="modal-content">
                 <h2>Load Video</h2>
                 <div class="form-group">
-                    <label for="video-path">Video Path:</label>
-                    <input type="text" id="video-path" placeholder="/path/to/video.mp4">
+                    <label>Video Source:</label>
+                    <div class="tabs">
+                        <button id="tab-file" class="tab active">Select File</button>
+                        <button id="tab-path" class="tab">Server Path</button>
+                    </div>
+                    
+                    <div id="input-file-container" class="input-container">
+                        <input type="file" id="video-file-input" accept="video/*">
+                    </div>
+                    
+                    <div id="input-path-container" class="input-container hidden">
+                        <input type="text" id="video-path" placeholder="/path/to/video.mp4">
+                    </div>
                 </div>
                 <div class="form-group">
-                    <label for="reference-path">Reference Images Folder:</label>
-                    <input type="text" id="reference-path" placeholder="/path/to/reference_images">
+                    <label>Reference Source:</label>
+                    <div class="tabs">
+                        <button id="tab-ref-folder" class="tab active">Select Folder</button>
+                        <button id="tab-ref-path" class="tab">Server Path</button>
+                    </div>
+
+                    <div id="input-ref-folder-container" class="input-container">
+                        <input type="file" id="reference-folder-input" webkitdirectory directory multiple>
+                    </div>
+
+                    <div id="input-ref-path-container" class="input-container hidden">
+                        <input type="text" id="reference-path" placeholder="/path/to/reference_images">
+                    </div>
                 </div>
                 <div class="form-group">
                     <label for="clip-padding">Clip Padding (seconds):</label>

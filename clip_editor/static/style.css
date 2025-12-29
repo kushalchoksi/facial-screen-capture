@@ -492,3 +492,31 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: #505050;
 }
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.tab {
+    padding: 8px 16px;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+    flex: 1;
+}
+
+.tab.active {
+    background: var(--bg-lighter);
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.input-container {
+    margin-top: 8px;
+}

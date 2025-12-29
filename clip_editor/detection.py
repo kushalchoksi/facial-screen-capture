@@ -1,8 +1,3 @@
-"""
-Face detection wrapper for the clip editor.
-Provides async-compatible detection with progress callbacks.
-"""
-
 import av
 import cv2
 import numpy as np
