@@ -1,0 +1,112 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-dark: #282a36;
+  --bg-darker: #21222c;
+  --bg-light: #44475a;
+  --text: #f8f8f2;
+  --text-muted: #6272a4;
+  --purple: #bd93f9;
+  --pink: #ff79c6;
+  --cyan: #8be9fd;
+  --green: #50fa7b;
+  --red: #ff5555;
+  --orange: #ffb86c;
+  --yellow: #f1fa8c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background-color: var(--bg-dark);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-darker);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-light);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Video element styling */
+video {
+  background-color: #000;
+}
+
+/* Timeline canvas */
+.timeline-canvas {
+  cursor: pointer;
+}
+
+.timeline-canvas.dragging {
+  cursor: ew-resize;
+}
+
+/* Clip item transitions */
+.clip-item {
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+/* Button hover effects */
+.btn-primary {
+  @apply bg-dracula-purple hover:bg-dracula-pink transition-colors duration-150;
+}
+
+.btn-secondary {
+  @apply bg-dracula-bg-light hover:bg-dracula-comment transition-colors duration-150;
+}
+
+.btn-danger {
+  @apply bg-dracula-red/20 hover:bg-dracula-red/40 text-dracula-red transition-colors duration-150;
+}
+
+/* Input styling */
+input[type="file"] {
+  display: none;
+}
+
+/* Progress bar */
+.progress-bar {
+  @apply h-1 bg-dracula-bg-light rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply h-full bg-dracula-purple transition-all duration-300;
+}
+
+/* Segment handle styling */
+.segment-handle {
+  cursor: ew-resize;
+}
+
+/* Focus states */
+button:focus-visible,
+input:focus-visible {
+  @apply outline-none ring-2 ring-dracula-purple ring-offset-2 ring-offset-dracula-bg;
+}
